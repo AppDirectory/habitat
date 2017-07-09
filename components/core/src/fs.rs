@@ -57,7 +57,10 @@ lazy_static! {
                 (Err(_), Err(_)) => unreachable!("Windows should always have a SYSTEMDRIVE environment variable.")
             }
         } else {
-            PathBuf::from("/")
+            match henv::var(FS_ROOT_ENVVAR) {
+                Ok(path) => PathBuf::from(path),
+                Err(_) => PathBuf::from("/")
+            }
         }
     };
 
