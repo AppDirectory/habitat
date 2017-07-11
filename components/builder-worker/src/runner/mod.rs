@@ -69,6 +69,12 @@ lazy_static! {
     static ref STUDIO_PKG: PackageIdent = PackageIdent::from_str("core/hab-studio").unwrap();
 }
 
+macro_rules! bldr_channel_name {
+    ($grp:expr) => {{
+        format!("bldr-{}", $grp)
+    }};
+}
+
 #[derive(Debug)]
 pub struct Job(proto::Job);
 
@@ -274,6 +280,11 @@ impl Runner {
         ];
         let command = studio_cmd();
         debug!("building, cmd={:?}, args={:?}", command, args);
+        debug!(
+            "setting HAB_DEPOT_CHANNEL={}",
+            &bldr_channel_name!(self.job().get_owner_id())
+        );
+
         let mut child = match env::var(RUNNER_DEBUG_ENV) {
             Ok(val) => {
                 Command::new(command)
@@ -281,6 +292,10 @@ impl Runner {
                     .env_clear()
                     .env("HAB_NONINTERACTIVE", "true")
                     .env("HAB_DEPOT_URL", &self.config.depot_url)
+                    .env(
+                        "HAB_DEPOT_CHANNEL",
+                        &bldr_channel_name!(self.job().get_owner_id()),
+                    )
                     .env("DEBUG", val)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -293,6 +308,7 @@ impl Runner {
                     .env_clear()
                     .env("HAB_NONINTERACTIVE", "true")
                     .env("HAB_DEPOT_URL", &self.config.depot_url)
+                    .env("HAB_DEPOT_CHANNEL", &bldr_channel_name!(self.job().get_owner_id()))
                     .env("TERM", "xterm-256color") // Gives us ANSI color codes
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
