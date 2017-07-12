@@ -132,6 +132,35 @@ struct PackageResults<'a, T: 'a> {
     package_list: &'a Vec<T>,
 }
 
+// This is a simple struct that's basically a copy of OriginPackageIdent but with an optional list
+// of channels added to it.
+#[derive(Serialize)]
+struct PackageIdentWithChannels {
+    origin: String,
+    name: String,
+    version: String,
+    release: String,
+    channels: Option<Vec<String>>,
+}
+
+impl PackageIdentWithChannels {
+    pub fn new(ident: OriginPackageIdent, channels: Option<Vec<String>>) -> Self {
+        let mut p = PackageIdentWithChannels {
+            origin: ident.get_origin().to_string(),
+            name: ident.get_name().to_string(),
+            version: ident.get_version().to_string(),
+            release: ident.get_release().to_string(),
+            channels: None,
+        };
+
+        if channels.is_some() {
+            p.channels = channels;
+        }
+
+        p
+    }
+}
+
 const PAGINATION_RANGE_DEFAULT: isize = 0;
 const PAGINATION_RANGE_MAX: isize = 50;
 const ONE_YEAR_IN_SECS: usize = 31536000;
@@ -1342,8 +1371,40 @@ fn list_packages(req: &mut Request) -> IronResult<Response> {
                 packages.get_stop(),
                 packages.get_count()
             );
+
+            let mut results = Vec::new();
+            let mut conn = Broker::connect().unwrap();
+
+            // The idea here is for every package we get back, pull its channels using the zmq API
+            // and accumulate those results. This avoids the N+1 HTTP requests that would be
+            // required to fetch channels for a list of packages in the UI.
+            for package in packages.get_idents().to_vec() {
+                let pkg: PackageIdentWithChannels;
+                let mut opclr = OriginPackageChannelListRequest::new();
+                opclr.set_ident(package.clone());
+
+                match conn.route::<OriginPackageChannelListRequest, OriginPackageChannelListResponse>(
+                    &opclr,
+                ) {
+                    Ok(channels) => {
+                        let list: Vec<String> = channels
+                            .get_channels()
+                            .iter()
+                            .map(|channel| channel.get_name().to_string())
+                            .collect();
+
+                        pkg = PackageIdentWithChannels::new(package, Some(list));
+                    }
+                    Err(_) => {
+                        pkg = PackageIdentWithChannels::new(package, None);
+                    }
+                }
+
+                results.push(pkg);
+            }
+
             let body = package_results_json(
-                &packages.get_idents().to_vec(),
+                &results,
                 packages.get_count() as isize,
                 packages.get_start() as isize,
                 packages.get_stop() as isize,
@@ -1638,7 +1699,7 @@ fn search_packages(req: &mut Request) -> IronResult<Response> {
         let decoded_query = match url::percent_encoding::percent_decode(query.as_bytes())
             .decode_utf8() {
             Ok(q) => q.to_string(),
-            Err(e) => return Ok(Response::with(status::BadRequest)),
+            Err(_) => return Ok(Response::with(status::BadRequest)),
         };
 
         match PackageIdent::from_str(decoded_query.as_ref()) {
